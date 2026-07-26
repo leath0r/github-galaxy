@@ -7,12 +7,14 @@ import { langColor } from '../lib/github'
 import { useGalaxy } from '../lib/store'
 
 export interface Orbit {
-  r: number // orbital radius from galactic core
+  center: [number, number, number] // galaxy (star) center
+  r: number // orbital radius
   a0: number // starting angle
-  y: number // height in the disk
-  speed: number // angular velocity (differential rotation)
-  phase: number // bob phase
+  speed: number // angular velocity (slow, inner faster)
+  phase: number
   size: number // planet radius
+  tiltX: number // orbital plane tilt
+  tiltZ: number
   trending: boolean
 }
 
@@ -34,22 +36,25 @@ export default function RepoPlanet({ repo, orbit, posMap }: Props) {
 
   const active = local || hoveredId === repo.id || selectedId === repo.id
   const color = useMemo(() => new THREE.Color(langColor(repo.language)), [repo.language])
+  const euler = useMemo(() => new THREE.Euler(orbit.tiltX, 0, orbit.tiltZ), [orbit.tiltX, orbit.tiltZ])
+  const center = useMemo(() => new THREE.Vector3(...orbit.center), [orbit.center])
   const vec = useMemo(() => new THREE.Vector3(), [])
+  const store = useMemo(() => new THREE.Vector3(), [])
 
   useFrame((state, delta) => {
     const t = state.clock.elapsedTime
-    // real orbital motion around the core (differential: inner faster)
     const angle = orbit.a0 + t * orbit.speed
-    const x = Math.cos(angle) * orbit.r
-    const z = Math.sin(angle) * orbit.r
-    const y = orbit.y + Math.sin(t * 0.6 + orbit.phase) * 0.35
-    group.current.position.set(x, y, z)
-    posMap.current.set(repo.id, vec.set(x, y, z).clone())
+    // position on the orbital ring, then tilt the plane, then offset to the star
+    vec.set(Math.cos(angle) * orbit.r, 0, Math.sin(angle) * orbit.r)
+    vec.applyEuler(euler)
+    vec.add(center)
+    vec.y += Math.sin(t * 0.5 + orbit.phase) * 0.12
+    group.current.position.copy(vec)
+    posMap.current.set(repo.id, store.copy(vec).clone())
 
     mesh.current.rotation.y += delta * 0.2
     const target = active ? 1.5 : 1
-    const s = THREE.MathUtils.lerp(mesh.current.scale.x, target, 0.15)
-    mesh.current.scale.setScalar(s)
+    mesh.current.scale.setScalar(THREE.MathUtils.lerp(mesh.current.scale.x, target, 0.15))
 
     const pulse = orbit.trending ? 1 + Math.sin(t * 3) * 0.1 : 1
     const hs = (active ? 2.1 : 1.55) * pulse
