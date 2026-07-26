@@ -4,6 +4,7 @@ import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 import type { Repo, StyleKey } from '../lib/github'
 import { STYLE, langColor } from '../lib/github'
+import { planetSkin } from '../lib/planetTexture'
 import { useGalaxy } from '../lib/store'
 
 export interface Orbit {
@@ -44,15 +45,21 @@ export default function RepoPlanet({ repo, orbit, styleKey, posMap }: Props) {
 
   const style = STYLE[styleKey]
   const archived = !!repo.archived
-  // resolve colours (default archetype falls back to language colour)
+  // procedural surface, styled by language family
+  const skin = useMemo(() => planetSkin(repo), [repo.id])
+  // halo/glow keeps the category colour; the sphere itself shows the texture
   const baseColor = styleKey === 'default' ? langColor(repo.language) : style.color
   const emissive = styleKey === 'default' ? langColor(repo.language) : style.emissive
-  const color = useMemo(
+  const haloColor = useMemo(
     () => (archived ? new THREE.Color('#5b6072') : new THREE.Color(baseColor)),
     [archived, baseColor],
   )
+  const surfaceColor = useMemo(
+    () => new THREE.Color(archived ? '#4a4f5e' : '#ffffff'),
+    [archived],
+  )
   const emColor = useMemo(() => new THREE.Color(archived ? '#3a3f4d' : emissive), [archived, emissive])
-  const emInt = archived ? 0.15 : style.emissiveIntensity
+  const emInt = archived ? 0.12 : Math.max(skin.emissiveIntensity, styleKey === 'ai' || styleKey === 'security' ? 0.9 : 0)
 
   const euler = useMemo(() => new THREE.Euler(orbit.tiltX, 0, orbit.tiltZ), [orbit.tiltX, orbit.tiltZ])
   const center = useMemo(() => new THREE.Vector3(...orbit.center), [orbit.center])
@@ -104,7 +111,7 @@ export default function RepoPlanet({ repo, orbit, styleKey, posMap }: Props) {
       {/* glow halo */}
       <mesh ref={halo} scale={1.55}>
         <sphereGeometry args={[orbit.size, 20, 20]} />
-        <meshBasicMaterial color={color} transparent opacity={0.16} blending={THREE.AdditiveBlending} depthWrite={false} />
+        <meshBasicMaterial color={haloColor} transparent opacity={0.16} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
 
       {/* red energy shell for security */}
@@ -172,11 +179,12 @@ export default function RepoPlanet({ repo, orbit, styleKey, posMap }: Props) {
       >
         <sphereGeometry args={[orbit.size, 32, 32]} />
         <meshStandardMaterial
-          color={color}
+          map={skin.texture}
+          color={surfaceColor}
           emissive={emColor}
-          emissiveIntensity={active ? emInt + 1 : emInt}
-          roughness={style.roughness}
-          metalness={style.metalness}
+          emissiveIntensity={active ? emInt + 0.8 : emInt}
+          roughness={skin.roughness}
+          metalness={skin.metalness}
         />
       </mesh>
 
