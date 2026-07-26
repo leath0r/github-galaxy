@@ -17,6 +17,20 @@ function hash(str: string) {
   return (h >>> 0) / 4294967295
 }
 
+// soft round sprite so particles look like dust, not hard squares
+function makeDot() {
+  const c = document.createElement('canvas')
+  c.width = c.height = 64
+  const ctx = c.getContext('2d')!
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
+  g.addColorStop(0, 'rgba(255,255,255,1)')
+  g.addColorStop(0.4, 'rgba(255,255,255,0.6)')
+  g.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, 64, 64)
+  return new THREE.CanvasTexture(c)
+}
+
 type SystemType = 'normal' | 'binary' | 'blackhole' | 'dwarf' | 'nebula' | 'chaotic'
 
 interface System {
@@ -89,7 +103,7 @@ function layout(repos: Repo[]): LayoutResult {
       if (repo.fork) size *= 0.7
       const ecc = chaotic ? 0.5 + hash(repo.full_name + 'e') * 0.5 : sysEcc + hash(repo.full_name + 'e') * 0.12
       const trending = !repo.archived && Date.now() - new Date(repo.pushed_at).getTime() < 7 * 864e5
-      const comet = !repo.archived && Date.now() - new Date(repo.created_at).getTime() < 45 * 864e5
+      const comet = !repo.archived && Date.now() - new Date(repo.created_at).getTime() < 21 * 864e5
       // chaotic clusters -> each planet has its own tilted, ringless orbit
       const tiltX = chaotic ? (hash(repo.full_name + 'ctx') - 0.5) * 2.4 : baseTiltX
       const tiltZ = chaotic ? (hash(repo.full_name + 'ctz') - 0.5) * 2.4 : baseTiltZ
@@ -293,13 +307,14 @@ function DataParticles() {
     }
     return new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(arr, 3))
   }, [])
+  const dot = useMemo(makeDot, [])
   useFrame((_, d) => {
     ref.current.rotation.y += d * 0.01
   })
   return (
     <points ref={ref}>
       <primitive object={geom} attach="geometry" />
-      <pointsMaterial color="#9db4ff" size={0.5} transparent opacity={0.5} sizeAttenuation blending={THREE.AdditiveBlending} depthWrite={false} />
+      <pointsMaterial map={dot} color="#9db4ff" size={1.1} transparent opacity={0.45} sizeAttenuation blending={THREE.AdditiveBlending} depthWrite={false} />
     </points>
   )
 }
@@ -308,13 +323,14 @@ function DataParticles() {
 function NearDust() {
   const ref = useRef<THREE.Points>(null!)
   const { camera } = useThree()
+  const dot = useMemo(makeDot, [])
   const geom = useMemo(() => {
-    const n = 220
+    const n = 160
     const arr = new Float32Array(n * 3)
     for (let i = 0; i < n; i++) {
-      arr[i * 3] = (Math.random() - 0.5) * 70
-      arr[i * 3 + 1] = (Math.random() - 0.5) * 70
-      arr[i * 3 + 2] = (Math.random() - 0.5) * 70
+      arr[i * 3] = (Math.random() - 0.5) * 80
+      arr[i * 3 + 1] = (Math.random() - 0.5) * 80
+      arr[i * 3 + 2] = (Math.random() - 0.5) * 80
     }
     return new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(arr, 3))
   }, [])
@@ -326,7 +342,7 @@ function NearDust() {
   return (
     <points ref={ref}>
       <primitive object={geom} attach="geometry" />
-      <pointsMaterial color="#cbd6ff" size={0.7} transparent opacity={0.35} sizeAttenuation blending={THREE.AdditiveBlending} depthWrite={false} />
+      <pointsMaterial map={dot} color="#cbd6ff" size={1.3} transparent opacity={0.28} sizeAttenuation blending={THREE.AdditiveBlending} depthWrite={false} />
     </points>
   )
 }

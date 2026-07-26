@@ -76,7 +76,7 @@ export default function RepoPlanet({ repo, orbit, styleKey, posMap }: Props) {
     if (tail.current) {
       tailDir.copy(vec).sub(center).normalize()
       tail.current.quaternion.setFromUnitVectors(upAxis, tailDir)
-      tail.current.position.copy(tailDir).multiplyScalar(orbit.size * 3.5)
+      tail.current.position.copy(tailDir).multiplyScalar(orbit.size * 2.5)
     }
 
     mesh.current.rotation.y += delta * 0.2
@@ -123,14 +123,14 @@ export default function RepoPlanet({ repo, orbit, styleKey, posMap }: Props) {
         </mesh>
       )}
 
-      {/* comet tail for brand-new repos */}
+      {/* comet tail for brand-new repos — thin subtle streak */}
       {orbit.comet && (
         <mesh ref={tail}>
-          <coneGeometry args={[orbit.size * 1.3, orbit.size * 7, 16, 1, true]} />
+          <coneGeometry args={[orbit.size * 0.4, orbit.size * 5, 12, 1, true]} />
           <meshBasicMaterial
-            color="#bfe3ff"
+            color="#cfe6ff"
             transparent
-            opacity={0.26}
+            opacity={0.16}
             side={THREE.DoubleSide}
             blending={THREE.AdditiveBlending}
             depthWrite={false}
