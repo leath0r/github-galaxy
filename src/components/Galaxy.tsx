@@ -3,9 +3,9 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls, Stars, Html } from '@react-three/drei'
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing'
 import * as THREE from 'three'
-import type { Repo } from '../lib/github'
+import type { Repo, StyleKey } from '../lib/github'
 import { useGalaxy } from '../lib/store'
-import { langColor } from '../lib/github'
+import { langColor, categoryOf } from '../lib/github'
 import RepoPlanet, { type Orbit } from './RepoPlanet'
 
 function hash(str: string) {
@@ -28,13 +28,13 @@ interface System {
 interface Placed {
   repo: Repo
   orbit: Orbit
+  styleKey: StyleKey
 }
 interface LayoutResult {
   systems: System[]
   placed: Placed[]
 }
 
-// Group repos by language into solar-system-like clusters spread through space.
 function layout(repos: Repo[]): LayoutResult {
   const byLang = new Map<string, Repo[]>()
   for (const r of repos) {
@@ -42,19 +42,17 @@ function layout(repos: Repo[]): LayoutResult {
     if (!byLang.has(k)) byLang.set(k, [])
     byLang.get(k)!.push(r)
   }
-  // biggest systems (by total stars) first -> placed nearer the middle
   const groups = [...byLang.entries()].sort(
     (a, b) =>
       b[1].reduce((s, r) => s + r.stargazers_count, 0) -
       a[1].reduce((s, r) => s + r.stargazers_count, 0),
   )
 
-  const SPACING = 78
+  const SPACING = 80
   const systems: System[] = []
   const placed: Placed[] = []
 
   groups.forEach(([lang, list], gi) => {
-    // golden-spiral placement of system centers on a gently thick disk
     const gr = SPACING * Math.sqrt(gi + 0.5)
     const gang = gi * 2.399963
     const center: [number, number, number] = [
@@ -68,16 +66,21 @@ function layout(repos: Repo[]): LayoutResult {
 
     const sorted = [...list].sort((a, b) => b.stargazers_count - a.stargazers_count)
     sorted.forEach((repo, i) => {
-      const r = 4 + i * 2.4 // each repo on its own ring
+      const r = 5 + i * 2.5
       const a0 = hash(repo.full_name) * Math.PI * 2
-      const speed = (0.05 / Math.sqrt(r)) * (hash(repo.full_name + 's') > 0.5 ? 1 : 1) // slow
-      const size = 0.45 + Math.log10(repo.stargazers_count + 10) * 0.4
-      const trending = Date.now() - new Date(repo.pushed_at).getTime() < 7 * 864e5
+      const speed = 0.05 / Math.sqrt(r) // slow, inner faster
+      // size means something: giant stars vs satellites; forks smaller
+      let size = 0.5 + Math.log10(repo.stargazers_count + 10) * 0.55
+      if (repo.fork) size *= 0.7
+      const ecc = 0.82 + hash(repo.full_name + 'e') * 0.18
+      const trending = !repo.archived && Date.now() - new Date(repo.pushed_at).getTime() < 7 * 864e5
       placed.push({
         repo,
+        styleKey: categoryOf(repo),
         orbit: {
           center,
           r,
+          ecc,
           a0,
           speed,
           phase: hash(repo.full_name + 'p') * Math.PI * 2,
@@ -102,46 +105,32 @@ function layout(repos: Repo[]): LayoutResult {
   return { systems, placed }
 }
 
-// A single thin white orbit ring (tilted), like a solar-system orbit.
-function Ring({
-  center,
-  r,
-  tiltX,
-  tiltZ,
-}: {
-  center: [number, number, number]
-  r: number
-  tiltX: number
-  tiltZ: number
-}) {
+function Ring({ orbit }: { orbit: Orbit }) {
   const geom = useMemo(() => {
     const pts: THREE.Vector3[] = []
     const seg = 96
-    const e = new THREE.Euler(tiltX, 0, tiltZ)
+    const e = new THREE.Euler(orbit.tiltX, 0, orbit.tiltZ)
+    const c = new THREE.Vector3(...orbit.center)
     for (let i = 0; i <= seg; i++) {
       const a = (i / seg) * Math.PI * 2
-      const v = new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r)
-      v.applyEuler(e)
-      v.add(new THREE.Vector3(...center))
+      const v = new THREE.Vector3(Math.cos(a) * orbit.r, 0, Math.sin(a) * orbit.r * orbit.ecc)
+      v.applyEuler(e).add(c)
       pts.push(v)
     }
     return new THREE.BufferGeometry().setFromPoints(pts)
-  }, [center, r, tiltX, tiltZ])
-
+  }, [orbit])
   return (
     <line>
       <primitive object={geom} attach="geometry" />
-      <lineBasicMaterial color="#ffffff" transparent opacity={0.12} depthWrite={false} />
+      <lineBasicMaterial color="#ffffff" transparent opacity={0.1} depthWrite={false} />
     </line>
   )
 }
 
-// Glowing star at a system center + a label for navigation.
 function SystemStar({ system }: { system: System }) {
   const ref = useRef<THREE.Mesh>(null!)
   useFrame((s) => {
-    const p = 1 + Math.sin(s.clock.elapsedTime * 0.8 + system.center[0]) * 0.06
-    ref.current.scale.setScalar(p)
+    ref.current.scale.setScalar(1 + Math.sin(s.clock.elapsedTime * 0.8 + system.center[0]) * 0.06)
   })
   return (
     <group position={system.center}>
@@ -151,15 +140,9 @@ function SystemStar({ system }: { system: System }) {
       </mesh>
       <mesh>
         <sphereGeometry args={[system.coreSize * 2.4, 24, 24]} />
-        <meshBasicMaterial
-          color={system.color}
-          transparent
-          opacity={0.22}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-        />
+        <meshBasicMaterial color={system.color} transparent opacity={0.22} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
-      <pointLight color="#fff1e0" intensity={2.2} distance={70} decay={1.5} />
+      <pointLight color="#fff1e0" intensity={2.2} distance={80} decay={1.5} />
       <Html center distanceFactor={90} style={{ pointerEvents: 'none' }}>
         <div
           style={{
@@ -180,36 +163,61 @@ function SystemStar({ system }: { system: System }) {
   )
 }
 
-function Nebula() {
-  const texture = useMemo(() => {
-    const c = document.createElement('canvas')
-    c.width = c.height = 1024
-    const ctx = c.getContext('2d')!
-    ctx.fillStyle = '#04030a'
-    ctx.fillRect(0, 0, 1024, 1024)
-    const blobs: [number, number, number, string][] = [
-      [320, 380, 460, 'rgba(88,28,135,0.5)'],
-      [720, 300, 380, 'rgba(30,64,175,0.42)'],
-      [600, 720, 500, 'rgba(126,34,206,0.38)'],
-      [200, 760, 340, 'rgba(14,116,144,0.32)'],
-      [820, 820, 300, 'rgba(162,28,175,0.28)'],
-    ]
-    for (const [x, y, rad, col] of blobs) {
-      const g = ctx.createRadialGradient(x, y, 0, x, y, rad)
-      g.addColorStop(0, col)
-      g.addColorStop(1, 'rgba(4,3,10,0)')
-      ctx.fillStyle = g
-      ctx.fillRect(0, 0, 1024, 1024)
+// Faint light bridges linking each system to its nearest neighbour.
+function Bridges({ systems }: { systems: System[] }) {
+  const geom = useMemo(() => {
+    const pts: number[] = []
+    for (let i = 0; i < systems.length; i++) {
+      let best = -1
+      let bd = Infinity
+      const a = new THREE.Vector3(...systems[i].center)
+      for (let j = 0; j < systems.length; j++) {
+        if (i === j) continue
+        const d = a.distanceTo(new THREE.Vector3(...systems[j].center))
+        if (d < bd) {
+          bd = d
+          best = j
+        }
+      }
+      if (best >= 0) {
+        const b = systems[best].center
+        pts.push(a.x, a.y, a.z, b[0], b[1], b[2])
+      }
     }
-    const tex = new THREE.CanvasTexture(c)
-    tex.colorSpace = THREE.SRGBColorSpace
-    return tex
-  }, [])
+    return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3))
+  }, [systems])
   return (
-    <mesh scale={[-1, 1, 1]}>
-      <sphereGeometry args={[400, 32, 32]} />
-      <meshBasicMaterial map={texture} side={THREE.BackSide} depthWrite={false} />
-    </mesh>
+    <lineSegments>
+      <primitive object={geom} attach="geometry" />
+      <lineBasicMaterial color="#6d5bd0" transparent opacity={0.18} blending={THREE.AdditiveBlending} depthWrite={false} />
+    </lineSegments>
+  )
+}
+
+// Drifting data particles for ambient life.
+function DataParticles() {
+  const ref = useRef<THREE.Points>(null!)
+  const geom = useMemo(() => {
+    const n = 700
+    const arr = new Float32Array(n * 3)
+    for (let i = 0; i < n; i++) {
+      const r = 40 + Math.random() * 260
+      const th = Math.random() * Math.PI * 2
+      const ph = Math.acos(2 * Math.random() - 1)
+      arr[i * 3] = r * Math.sin(ph) * Math.cos(th)
+      arr[i * 3 + 1] = (Math.random() - 0.5) * 80
+      arr[i * 3 + 2] = r * Math.sin(ph) * Math.sin(th)
+    }
+    return new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(arr, 3))
+  }, [])
+  useFrame((_, d) => {
+    ref.current.rotation.y += d * 0.01
+  })
+  return (
+    <points ref={ref}>
+      <primitive object={geom} attach="geometry" />
+      <pointsMaterial color="#9db4ff" size={0.5} transparent opacity={0.5} sizeAttenuation blending={THREE.AdditiveBlending} depthWrite={false} />
+    </points>
   )
 }
 
@@ -238,7 +246,7 @@ function Connections({
         const sharedTopic = p.repo.topics.some((t) => ftopics.has(t))
         return sameLang || sharedTopic
       })
-      .slice(0, 16)
+      .slice(0, 18)
       .map((p) => p.repo.id)
   }, [focusId, placed])
 
@@ -264,40 +272,58 @@ function Connections({
   return (
     <lineSegments ref={lineRef}>
       <primitive object={geom.current} attach="geometry" />
-      <lineBasicMaterial
-        color="#a5b4fc"
-        transparent
-        opacity={0.4}
-        blending={THREE.AdditiveBlending}
-        depthWrite={false}
-      />
+      <lineBasicMaterial color="#a5b4fc" transparent opacity={0.45} blending={THREE.AdditiveBlending} depthWrite={false} />
     </lineSegments>
   )
 }
 
-// Fly camera to a selected planet (live position). Free pan/zoom otherwise.
+// Cinematic camera: ease-in-out fly to selected planet (accelerate then settle).
 function CameraRig({ posMap }: { posMap: React.MutableRefObject<Map<number, THREE.Vector3>> }) {
   const selected = useGalaxy((s) => s.selected)
   const controls = useRef<any>(null)
   const { camera } = useThree()
+  const prevId = useRef<number | null>(null)
+  const flyT = useRef(1)
+  const start = useRef(new THREE.Vector3())
+  const startTarget = useRef(new THREE.Vector3())
   const tPos = useRef(new THREE.Vector3())
   const tLook = useRef(new THREE.Vector3())
 
-  useFrame(() => {
-    if (selected) {
-      const p = posMap.current.get(selected.id)
-      if (p) {
-        // approach from the camera's current side so the fly-in feels natural
-        const dir = camera.position.clone().sub(p)
-        if (dir.lengthSq() < 0.001) dir.set(0, 0, 1)
-        dir.normalize()
-        tPos.current.copy(p).addScaledVector(dir, 8).add(new THREE.Vector3(0, 3, 0))
-        tLook.current.copy(p)
-        camera.position.lerp(tPos.current, 0.05)
-        if (controls.current) {
-          controls.current.target.lerp(tLook.current, 0.08)
-          controls.current.update()
-        }
+  const ease = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2)
+
+  useFrame((_, delta) => {
+    const id = selected?.id ?? null
+    if (id !== prevId.current) {
+      prevId.current = id
+      if (id != null) {
+        flyT.current = 0
+        start.current.copy(camera.position)
+        startTarget.current.copy(controls.current ? controls.current.target : new THREE.Vector3())
+      }
+    }
+    if (id == null) return
+    const p = posMap.current.get(id)
+    if (!p) return
+    const dir = camera.position.clone().sub(p)
+    if (dir.lengthSq() < 0.001) dir.set(0, 0, 1)
+    dir.normalize()
+    tPos.current.copy(p).addScaledVector(dir, 8).add(new THREE.Vector3(0, 3, 0))
+    tLook.current.copy(p)
+
+    if (flyT.current < 1) {
+      flyT.current = Math.min(1, flyT.current + delta / 1.4)
+      const e = ease(flyT.current)
+      camera.position.lerpVectors(start.current, tPos.current, e)
+      if (controls.current) {
+        controls.current.target.lerpVectors(startTarget.current, tLook.current, e)
+        controls.current.update()
+      }
+    } else {
+      // keep gently tracking the moving planet after arrival
+      camera.position.lerp(tPos.current, 0.04)
+      if (controls.current) {
+        controls.current.target.lerp(tLook.current, 0.06)
+        controls.current.update()
       }
     }
   })
@@ -314,7 +340,7 @@ function CameraRig({ posMap }: { posMap: React.MutableRefObject<Map<number, THRE
       rotateSpeed={0.5}
       zoomSpeed={0.9}
       minDistance={4}
-      maxDistance={420}
+      maxDistance={460}
     />
   )
 }
@@ -333,33 +359,28 @@ export default function Galaxy() {
       onPointerMissed={() => select(null)}
     >
       <color attach="background" args={['#04030a']} />
-      <fog attach="fog" args={['#04030a', 130, 420]} />
+      <fog attach="fog" args={['#04030a', 150, 460]} />
       <ambientLight intensity={0.35} />
 
-      <Nebula />
-      <Stars radius={320} depth={120} count={9000} factor={5} saturation={0} fade speed={0.4} />
+      <Stars radius={340} depth={130} count={9000} factor={5} saturation={0} fade speed={0.4} />
+      <DataParticles />
+      <Bridges systems={systems} />
 
       {systems.map((s) => (
         <SystemStar key={s.key} system={s} />
       ))}
       {placed.map((p) => (
-        <Ring
-          key={'ring' + p.repo.id}
-          center={p.orbit.center}
-          r={p.orbit.r}
-          tiltX={p.orbit.tiltX}
-          tiltZ={p.orbit.tiltZ}
-        />
+        <Ring key={'ring' + p.repo.id} orbit={p.orbit} />
       ))}
       {placed.map((p) => (
-        <RepoPlanet key={p.repo.id} repo={p.repo} orbit={p.orbit} posMap={posMap} />
+        <RepoPlanet key={p.repo.id} repo={p.repo} orbit={p.orbit} styleKey={p.styleKey} posMap={posMap} />
       ))}
 
       <Connections placed={placed} posMap={posMap} />
       <CameraRig posMap={posMap} />
 
       <EffectComposer>
-        <Bloom intensity={0.85} luminanceThreshold={0.22} luminanceSmoothing={0.6} mipmapBlur />
+        <Bloom intensity={0.9} luminanceThreshold={0.2} luminanceSmoothing={0.6} mipmapBlur />
         <Vignette eskil={false} offset={0.25} darkness={0.95} />
       </EffectComposer>
     </Canvas>

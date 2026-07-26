@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
 import { useGalaxy } from '../lib/store'
-import { getReadme, getContributors, langColor } from '../lib/github'
+import { getReadme, getContributors, getLanguages, langColor } from '../lib/github'
 
 function fmt(n: number) {
   if (n >= 1000) return (n / 1000).toFixed(1).replace('.0', '') + 'k'
@@ -31,6 +31,11 @@ export default function InfoPanel() {
   const { data: contributors } = useQuery({
     queryKey: ['contrib', repo?.full_name],
     queryFn: () => getContributors(repo!.full_name),
+    enabled: !!repo,
+  })
+  const { data: languages } = useQuery({
+    queryKey: ['langs', repo?.full_name],
+    queryFn: () => getLanguages(repo!.full_name),
     enabled: !!repo,
   })
 
@@ -108,6 +113,29 @@ export default function InfoPanel() {
             {repo.license && <span>⚖ {repo.license.spdx_id}</span>}
             <span>↻ {new Date(repo.pushed_at).toLocaleDateString()}</span>
           </div>
+
+          {languages && languages.length > 0 && (
+            <div className="mt-5">
+              <div className="mb-1.5 text-[11px] uppercase tracking-wide text-white/40">Languages</div>
+              <div className="flex h-2.5 w-full overflow-hidden rounded-full">
+                {languages.map(([name, frac]) => (
+                  <div
+                    key={name}
+                    title={`${name} ${(frac * 100).toFixed(0)}%`}
+                    style={{ width: `${frac * 100}%`, background: langColor(name) }}
+                  />
+                ))}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/55">
+                {languages.map(([name, frac]) => (
+                  <span key={name} className="flex items-center gap-1.5">
+                    <span className="inline-block h-2 w-2 rounded-full" style={{ background: langColor(name) }} />
+                    {name} {(frac * 100).toFixed(0)}%
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           {readme && (
             <div className="mt-5">
