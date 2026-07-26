@@ -72,20 +72,17 @@ function layout(repos: Repo[]): LayoutResult {
     const gang = gi * 2.399963
     const center: [number, number, number] = [
       Math.cos(gang) * gr,
-      (hash(lang + 'cy') - 0.5) * 40, // more vertical spread -> real 3D
+      (hash(lang + 'cy') - 0.5) * 30, // vertical spread -> 3D depth
       Math.sin(gang) * gr,
     ]
     const color = langColor(lang === 'Other' ? null : lang)
 
-    // pick a system archetype for variety
+    // only two archetypes kept: black holes (archived-heavy) + chaotic clusters
     const archivedRatio = list.filter((r) => r.archived).length / list.length
     const ht = hash(lang + 'type')
     let type: SystemType
     if (archivedRatio > 0.4) type = 'blackhole'
-    else if (ht < 0.16) type = 'binary'
-    else if (ht < 0.32) type = 'nebula'
-    else if (ht < 0.46) type = 'dwarf'
-    else if (ht < 0.6) type = 'chaotic'
+    else if (ht < 0.25) type = 'chaotic'
     else type = 'normal'
 
     const chaotic = type === 'chaotic'
@@ -103,7 +100,7 @@ function layout(repos: Repo[]): LayoutResult {
       if (repo.fork) size *= 0.7
       const ecc = chaotic ? 0.5 + hash(repo.full_name + 'e') * 0.5 : sysEcc + hash(repo.full_name + 'e') * 0.12
       const trending = !repo.archived && Date.now() - new Date(repo.pushed_at).getTime() < 7 * 864e5
-      const comet = !repo.archived && Date.now() - new Date(repo.created_at).getTime() < 21 * 864e5
+      const comet = false // comets removed by request
       // chaotic clusters -> each planet has its own tilted, ringless orbit
       const tiltX = chaotic ? (hash(repo.full_name + 'ctx') - 0.5) * 2.4 : baseTiltX
       const tiltZ = chaotic ? (hash(repo.full_name + 'ctz') - 0.5) * 2.4 : baseTiltZ
@@ -163,20 +160,11 @@ function Ring({ orbit }: { orbit: Orbit }) {
 
 function SystemStar({ system }: { system: System }) {
   const a = useRef<THREE.Mesh>(null!)
-  const b = useRef<THREE.Mesh>(null!)
   const disk = useRef<THREE.Mesh>(null!)
   const cs = system.coreSize
 
   useFrame((s) => {
-    const t = s.clock.elapsedTime
-    if (system.type === 'binary') {
-      const ang = t * 0.6
-      const d = cs * 1.6
-      a.current.position.set(Math.cos(ang) * d, 0, Math.sin(ang) * d)
-      b.current.position.set(-Math.cos(ang) * d, 0, -Math.sin(ang) * d)
-    } else if (a.current) {
-      a.current.scale.setScalar(1 + Math.sin(t * 0.8 + system.center[0]) * 0.06)
-    }
+    if (a.current) a.current.scale.setScalar(1 + Math.sin(s.clock.elapsedTime * 0.8 + system.center[0]) * 0.06)
     if (disk.current) disk.current.rotation.z += 0.01
   })
 
@@ -206,7 +194,6 @@ function SystemStar({ system }: { system: System }) {
           <sphereGeometry args={[cs * 0.9, 32, 32]} />
           <meshBasicMaterial color="#000000" />
         </mesh>
-        {/* accretion disk */}
         <mesh ref={disk} rotation={[Math.PI / 2.1, 0, 0]}>
           <ringGeometry args={[cs * 1.2, cs * 3.2, 64]} />
           <meshBasicMaterial color="#ff7a18" transparent opacity={0.7} side={THREE.DoubleSide} blending={THREE.AdditiveBlending} depthWrite={false} />
@@ -220,42 +207,18 @@ function SystemStar({ system }: { system: System }) {
     )
   }
 
-  if (system.type === 'binary') {
-    return (
-      <group position={system.center}>
-        <mesh ref={a}>
-          <sphereGeometry args={[cs * 0.7, 24, 24]} />
-          <meshBasicMaterial color="#fff2d6" />
-        </mesh>
-        <mesh ref={b}>
-          <sphereGeometry args={[cs * 0.6, 24, 24]} />
-          <meshBasicMaterial color="#bcd4ff" />
-        </mesh>
-        <pointLight color="#fff1e0" intensity={2.2} distance={90} decay={1.5} />
-        {label}
-      </group>
-    )
-  }
-
-  // normal / dwarf / nebula / chaotic all share a central star
-  const starColor = system.type === 'dwarf' ? '#ffb27a' : '#fff8f0'
+  // normal + chaotic share a central star
   return (
     <group position={system.center}>
       <mesh ref={a}>
         <sphereGeometry args={[cs, 32, 32]} />
-        <meshBasicMaterial color={starColor} />
+        <meshBasicMaterial color="#fff8f0" />
       </mesh>
       <mesh>
         <sphereGeometry args={[cs * 2.4, 24, 24]} />
         <meshBasicMaterial color={system.color} transparent opacity={0.22} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
-      {system.type === 'nebula' && (
-        <mesh>
-          <sphereGeometry args={[cs * 9, 24, 24]} />
-          <meshBasicMaterial color={system.color} transparent opacity={0.06} side={THREE.BackSide} blending={THREE.AdditiveBlending} depthWrite={false} />
-        </mesh>
-      )}
-      <pointLight color="#fff1e0" intensity={system.type === 'dwarf' ? 1.1 : 2.2} distance={80} decay={1.5} />
+      <pointLight color="#fff1e0" intensity={2.2} distance={80} decay={1.5} />
       {label}
     </group>
   )
@@ -315,34 +278,6 @@ function DataParticles() {
     <points ref={ref}>
       <primitive object={geom} attach="geometry" />
       <pointsMaterial map={dot} color="#9db4ff" size={1.1} transparent opacity={0.45} sizeAttenuation blending={THREE.AdditiveBlending} depthWrite={false} />
-    </points>
-  )
-}
-
-// Foreground dust that follows the camera -> parallax + real depth cue.
-function NearDust() {
-  const ref = useRef<THREE.Points>(null!)
-  const { camera } = useThree()
-  const dot = useMemo(makeDot, [])
-  const geom = useMemo(() => {
-    const n = 160
-    const arr = new Float32Array(n * 3)
-    for (let i = 0; i < n; i++) {
-      arr[i * 3] = (Math.random() - 0.5) * 80
-      arr[i * 3 + 1] = (Math.random() - 0.5) * 80
-      arr[i * 3 + 2] = (Math.random() - 0.5) * 80
-    }
-    return new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(arr, 3))
-  }, [])
-  useFrame((_, d) => {
-    ref.current.position.copy(camera.position)
-    ref.current.rotation.y += d * 0.03
-    ref.current.rotation.x += d * 0.015
-  })
-  return (
-    <points ref={ref}>
-      <primitive object={geom} attach="geometry" />
-      <pointsMaterial map={dot} color="#cbd6ff" size={1.3} transparent opacity={0.28} sizeAttenuation blending={THREE.AdditiveBlending} depthWrite={false} />
     </points>
   )
 }
@@ -518,7 +453,6 @@ export default function Galaxy() {
 
       <Stars radius={360} depth={140} count={9000} factor={5} saturation={0} fade speed={0.4} />
       <DataParticles />
-      <NearDust />
       <Bridges systems={systems} />
 
       {systems.map((s) => (
