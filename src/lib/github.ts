@@ -46,7 +46,7 @@ async function gh<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export async function searchRepos(q: string, sort = 'stars', per = 40): Promise<Repo[]> {
+export async function searchRepos(q: string, sort = 'stars', per = 80): Promise<Repo[]> {
   const query = q.trim() || 'stars:>10000'
   const data = await gh<{ items: Repo[] }>(
     `/search/repositories?q=${encodeURIComponent(query)}&sort=${sort}&order=desc&per_page=${per}`,
@@ -54,7 +54,7 @@ export async function searchRepos(q: string, sort = 'stars', per = 40): Promise<
   return data.items.map((r) => ({ ...r, topics: r.topics ?? [] }))
 }
 
-export async function trending(days = 14, per = 40): Promise<Repo[]> {
+export async function trending(days = 14, per = 80): Promise<Repo[]> {
   const since = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10)
   return searchRepos(`created:>${since} stars:>100`, 'stars', per)
 }

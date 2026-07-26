@@ -256,7 +256,7 @@ export default function Galaxy() {
       onPointerMissed={() => select(null)}
     >
       <color attach="background" args={['#04030a']} />
-      <fog attach="fog" args={['#04030a', 70, 150]} />
+      <fog attach="fog" args={['#04030a', 80, 210]} />
       <ambientLight intensity={0.35} />
       <pointLight position={[50, 40, -30]} intensity={1.0} color="#60a5fa" />
 
@@ -272,7 +272,7 @@ export default function Galaxy() {
       <CameraRig posMap={posMap} />
 
       <EffectComposer>
-        <Bloom intensity={1.15} luminanceThreshold={0.12} luminanceSmoothing={0.5} mipmapBlur />
+        <Bloom intensity={0.85} luminanceThreshold={0.22} luminanceSmoothing={0.6} mipmapBlur />
         <Vignette eskil={false} offset={0.25} darkness={0.95} />
       </EffectComposer>
     </Canvas>
