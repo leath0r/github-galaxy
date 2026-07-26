@@ -17,6 +17,8 @@ export interface Orbit {
   tiltX: number
   tiltZ: number
   trending: boolean
+  comet: boolean // brand-new repo -> comet tail
+  showRing: boolean // false for chaotic clusters
 }
 
 interface Props {
@@ -56,6 +58,9 @@ export default function RepoPlanet({ repo, orbit, styleKey, posMap }: Props) {
   const center = useMemo(() => new THREE.Vector3(...orbit.center), [orbit.center])
   const vec = useMemo(() => new THREE.Vector3(), [])
   const store = useMemo(() => new THREE.Vector3(), [])
+  const tail = useRef<THREE.Mesh>(null!)
+  const tailDir = useMemo(() => new THREE.Vector3(), [])
+  const upAxis = useMemo(() => new THREE.Vector3(0, 1, 0), [])
 
   useFrame((state, delta) => {
     const t = state.clock.elapsedTime
@@ -66,6 +71,13 @@ export default function RepoPlanet({ repo, orbit, styleKey, posMap }: Props) {
     vec.y += Math.sin(t * 0.5 + orbit.phase) * 0.12
     group.current.position.copy(vec)
     posMap.current.set(repo.id, store.copy(vec).clone())
+
+    // comet tail points radially away from the system star
+    if (tail.current) {
+      tailDir.copy(vec).sub(center).normalize()
+      tail.current.quaternion.setFromUnitVectors(upAxis, tailDir)
+      tail.current.position.copy(tailDir).multiplyScalar(orbit.size * 3.5)
+    }
 
     mesh.current.rotation.y += delta * 0.2
     const target = active ? 1.5 : 1
@@ -108,6 +120,21 @@ export default function RepoPlanet({ repo, orbit, styleKey, posMap }: Props) {
         <mesh ref={gold} scale={1.9}>
           <sphereGeometry args={[orbit.size, 20, 20]} />
           <meshBasicMaterial color="#ffd45e" transparent opacity={0.22} blending={THREE.AdditiveBlending} depthWrite={false} />
+        </mesh>
+      )}
+
+      {/* comet tail for brand-new repos */}
+      {orbit.comet && (
+        <mesh ref={tail}>
+          <coneGeometry args={[orbit.size * 1.3, orbit.size * 7, 16, 1, true]} />
+          <meshBasicMaterial
+            color="#bfe3ff"
+            transparent
+            opacity={0.26}
+            side={THREE.DoubleSide}
+            blending={THREE.AdditiveBlending}
+            depthWrite={false}
+          />
         </mesh>
       )}
 

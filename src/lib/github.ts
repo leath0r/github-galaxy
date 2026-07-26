@@ -16,6 +16,7 @@ export interface Repo {
   watchers_count: number
   open_issues_count: number
   license: { spdx_id: string; name: string } | null
+  created_at: string
   updated_at: string
   pushed_at: string
   default_branch: string

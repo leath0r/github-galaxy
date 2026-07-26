@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls, Stars, Html } from '@react-three/drei'
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing'
@@ -17,13 +17,14 @@ function hash(str: string) {
   return (h >>> 0) / 4294967295
 }
 
+type SystemType = 'normal' | 'binary' | 'blackhole' | 'dwarf' | 'nebula' | 'chaotic'
+
 interface System {
   key: string
   center: [number, number, number]
-  tiltX: number
-  tiltZ: number
   color: string
   coreSize: number
+  type: SystemType
 }
 interface Placed {
   repo: Repo
@@ -48,7 +49,7 @@ function layout(repos: Repo[]): LayoutResult {
       a[1].reduce((s, r) => s + r.stargazers_count, 0),
   )
 
-  const SPACING = 80
+  const SPACING = 82
   const systems: System[] = []
   const placed: Placed[] = []
 
@@ -57,23 +58,41 @@ function layout(repos: Repo[]): LayoutResult {
     const gang = gi * 2.399963
     const center: [number, number, number] = [
       Math.cos(gang) * gr,
-      (hash(lang + 'cy') - 0.5) * 26,
+      (hash(lang + 'cy') - 0.5) * 40, // more vertical spread -> real 3D
       Math.sin(gang) * gr,
     ]
-    const tiltX = (hash(lang + 'tx') - 0.5) * 0.9
-    const tiltZ = (hash(lang + 'tz') - 0.5) * 0.9
     const color = langColor(lang === 'Other' ? null : lang)
+
+    // pick a system archetype for variety
+    const archivedRatio = list.filter((r) => r.archived).length / list.length
+    const ht = hash(lang + 'type')
+    let type: SystemType
+    if (archivedRatio > 0.4) type = 'blackhole'
+    else if (ht < 0.16) type = 'binary'
+    else if (ht < 0.32) type = 'nebula'
+    else if (ht < 0.46) type = 'dwarf'
+    else if (ht < 0.6) type = 'chaotic'
+    else type = 'normal'
+
+    const chaotic = type === 'chaotic'
+    // elliptical variety per system
+    const sysEcc = 0.6 + hash(lang + 'ecc') * 0.4
+    const baseTiltX = (hash(lang + 'tx') - 0.5) * 0.9
+    const baseTiltZ = (hash(lang + 'tz') - 0.5) * 0.9
 
     const sorted = [...list].sort((a, b) => b.stargazers_count - a.stargazers_count)
     sorted.forEach((repo, i) => {
-      const r = 5 + i * 2.5
+      const r = 5 + i * (chaotic ? 2.9 : 2.5) + (chaotic ? (hash(repo.full_name + 'r') - 0.5) * 6 : 0)
       const a0 = hash(repo.full_name) * Math.PI * 2
-      const speed = 0.05 / Math.sqrt(r) // slow, inner faster
-      // size means something: giant stars vs satellites; forks smaller
+      const speed = (0.05 / Math.sqrt(r)) * (chaotic ? 1 + hash(repo.full_name + 'sp') : 1)
       let size = 0.5 + Math.log10(repo.stargazers_count + 10) * 0.55
       if (repo.fork) size *= 0.7
-      const ecc = 0.82 + hash(repo.full_name + 'e') * 0.18
+      const ecc = chaotic ? 0.5 + hash(repo.full_name + 'e') * 0.5 : sysEcc + hash(repo.full_name + 'e') * 0.12
       const trending = !repo.archived && Date.now() - new Date(repo.pushed_at).getTime() < 7 * 864e5
+      const comet = !repo.archived && Date.now() - new Date(repo.created_at).getTime() < 45 * 864e5
+      // chaotic clusters -> each planet has its own tilted, ringless orbit
+      const tiltX = chaotic ? (hash(repo.full_name + 'ctx') - 0.5) * 2.4 : baseTiltX
+      const tiltZ = chaotic ? (hash(repo.full_name + 'ctz') - 0.5) * 2.4 : baseTiltZ
       placed.push({
         repo,
         styleKey: categoryOf(repo),
@@ -88,6 +107,8 @@ function layout(repos: Repo[]): LayoutResult {
           tiltX,
           tiltZ,
           trending,
+          comet,
+          showRing: !chaotic,
         },
       })
     })
@@ -95,10 +116,9 @@ function layout(repos: Repo[]): LayoutResult {
     systems.push({
       key: lang,
       center,
-      tiltX,
-      tiltZ,
       color,
-      coreSize: 1.4 + Math.log10(list.length + 1) * 1.1,
+      coreSize: (1.4 + Math.log10(list.length + 1) * 1.1) * (type === 'dwarf' ? 0.55 : 1),
+      type,
     })
   })
 
@@ -122,48 +142,111 @@ function Ring({ orbit }: { orbit: Orbit }) {
   return (
     <line>
       <primitive object={geom} attach="geometry" />
-      <lineBasicMaterial color="#ffffff" transparent opacity={0.1} depthWrite={false} />
+      <lineBasicMaterial color="#ffffff" transparent opacity={0.09} depthWrite={false} />
     </line>
   )
 }
 
 function SystemStar({ system }: { system: System }) {
-  const ref = useRef<THREE.Mesh>(null!)
+  const a = useRef<THREE.Mesh>(null!)
+  const b = useRef<THREE.Mesh>(null!)
+  const disk = useRef<THREE.Mesh>(null!)
+  const cs = system.coreSize
+
   useFrame((s) => {
-    ref.current.scale.setScalar(1 + Math.sin(s.clock.elapsedTime * 0.8 + system.center[0]) * 0.06)
+    const t = s.clock.elapsedTime
+    if (system.type === 'binary') {
+      const ang = t * 0.6
+      const d = cs * 1.6
+      a.current.position.set(Math.cos(ang) * d, 0, Math.sin(ang) * d)
+      b.current.position.set(-Math.cos(ang) * d, 0, -Math.sin(ang) * d)
+    } else if (a.current) {
+      a.current.scale.setScalar(1 + Math.sin(t * 0.8 + system.center[0]) * 0.06)
+    }
+    if (disk.current) disk.current.rotation.z += 0.01
   })
+
+  const label = (
+    <Html center distanceFactor={95} style={{ pointerEvents: 'none' }}>
+      <div
+        style={{
+          transform: 'translateY(-30px)',
+          whiteSpace: 'nowrap',
+          fontSize: 12,
+          fontWeight: 600,
+          letterSpacing: 0.4,
+          textTransform: 'uppercase',
+          color: 'rgba(255,255,255,0.5)',
+          textShadow: '0 2px 8px rgba(0,0,0,0.6)',
+        }}
+      >
+        {system.key}
+      </div>
+    </Html>
+  )
+
+  if (system.type === 'blackhole') {
+    return (
+      <group position={system.center}>
+        <mesh>
+          <sphereGeometry args={[cs * 0.9, 32, 32]} />
+          <meshBasicMaterial color="#000000" />
+        </mesh>
+        {/* accretion disk */}
+        <mesh ref={disk} rotation={[Math.PI / 2.1, 0, 0]}>
+          <ringGeometry args={[cs * 1.2, cs * 3.2, 64]} />
+          <meshBasicMaterial color="#ff7a18" transparent opacity={0.7} side={THREE.DoubleSide} blending={THREE.AdditiveBlending} depthWrite={false} />
+        </mesh>
+        <mesh>
+          <sphereGeometry args={[cs * 1.05, 32, 32]} />
+          <meshBasicMaterial color="#8b5cf6" transparent opacity={0.25} side={THREE.BackSide} blending={THREE.AdditiveBlending} depthWrite={false} />
+        </mesh>
+        {label}
+      </group>
+    )
+  }
+
+  if (system.type === 'binary') {
+    return (
+      <group position={system.center}>
+        <mesh ref={a}>
+          <sphereGeometry args={[cs * 0.7, 24, 24]} />
+          <meshBasicMaterial color="#fff2d6" />
+        </mesh>
+        <mesh ref={b}>
+          <sphereGeometry args={[cs * 0.6, 24, 24]} />
+          <meshBasicMaterial color="#bcd4ff" />
+        </mesh>
+        <pointLight color="#fff1e0" intensity={2.2} distance={90} decay={1.5} />
+        {label}
+      </group>
+    )
+  }
+
+  // normal / dwarf / nebula / chaotic all share a central star
+  const starColor = system.type === 'dwarf' ? '#ffb27a' : '#fff8f0'
   return (
     <group position={system.center}>
-      <mesh ref={ref}>
-        <sphereGeometry args={[system.coreSize, 32, 32]} />
-        <meshBasicMaterial color="#fff8f0" />
+      <mesh ref={a}>
+        <sphereGeometry args={[cs, 32, 32]} />
+        <meshBasicMaterial color={starColor} />
       </mesh>
       <mesh>
-        <sphereGeometry args={[system.coreSize * 2.4, 24, 24]} />
+        <sphereGeometry args={[cs * 2.4, 24, 24]} />
         <meshBasicMaterial color={system.color} transparent opacity={0.22} blending={THREE.AdditiveBlending} depthWrite={false} />
       </mesh>
-      <pointLight color="#fff1e0" intensity={2.2} distance={80} decay={1.5} />
-      <Html center distanceFactor={90} style={{ pointerEvents: 'none' }}>
-        <div
-          style={{
-            transform: 'translateY(-30px)',
-            whiteSpace: 'nowrap',
-            fontSize: 12,
-            fontWeight: 600,
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
-            color: 'rgba(255,255,255,0.55)',
-            textShadow: '0 2px 8px rgba(0,0,0,0.6)',
-          }}
-        >
-          {system.key}
-        </div>
-      </Html>
+      {system.type === 'nebula' && (
+        <mesh>
+          <sphereGeometry args={[cs * 9, 24, 24]} />
+          <meshBasicMaterial color={system.color} transparent opacity={0.06} side={THREE.BackSide} blending={THREE.AdditiveBlending} depthWrite={false} />
+        </mesh>
+      )}
+      <pointLight color="#fff1e0" intensity={system.type === 'dwarf' ? 1.1 : 2.2} distance={80} decay={1.5} />
+      {label}
     </group>
   )
 }
 
-// Faint light bridges linking each system to its nearest neighbour.
 function Bridges({ systems }: { systems: System[] }) {
   const geom = useMemo(() => {
     const pts: number[] = []
@@ -189,23 +272,23 @@ function Bridges({ systems }: { systems: System[] }) {
   return (
     <lineSegments>
       <primitive object={geom} attach="geometry" />
-      <lineBasicMaterial color="#6d5bd0" transparent opacity={0.18} blending={THREE.AdditiveBlending} depthWrite={false} />
+      <lineBasicMaterial color="#6d5bd0" transparent opacity={0.16} blending={THREE.AdditiveBlending} depthWrite={false} />
     </lineSegments>
   )
 }
 
-// Drifting data particles for ambient life.
+// Ambient drifting data particles (mid/far depth).
 function DataParticles() {
   const ref = useRef<THREE.Points>(null!)
   const geom = useMemo(() => {
-    const n = 700
+    const n = 800
     const arr = new Float32Array(n * 3)
     for (let i = 0; i < n; i++) {
-      const r = 40 + Math.random() * 260
+      const r = 40 + Math.random() * 300
       const th = Math.random() * Math.PI * 2
       const ph = Math.acos(2 * Math.random() - 1)
       arr[i * 3] = r * Math.sin(ph) * Math.cos(th)
-      arr[i * 3 + 1] = (Math.random() - 0.5) * 80
+      arr[i * 3 + 1] = (Math.random() - 0.5) * 120
       arr[i * 3 + 2] = r * Math.sin(ph) * Math.sin(th)
     }
     return new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(arr, 3))
@@ -217,6 +300,33 @@ function DataParticles() {
     <points ref={ref}>
       <primitive object={geom} attach="geometry" />
       <pointsMaterial color="#9db4ff" size={0.5} transparent opacity={0.5} sizeAttenuation blending={THREE.AdditiveBlending} depthWrite={false} />
+    </points>
+  )
+}
+
+// Foreground dust that follows the camera -> parallax + real depth cue.
+function NearDust() {
+  const ref = useRef<THREE.Points>(null!)
+  const { camera } = useThree()
+  const geom = useMemo(() => {
+    const n = 220
+    const arr = new Float32Array(n * 3)
+    for (let i = 0; i < n; i++) {
+      arr[i * 3] = (Math.random() - 0.5) * 70
+      arr[i * 3 + 1] = (Math.random() - 0.5) * 70
+      arr[i * 3 + 2] = (Math.random() - 0.5) * 70
+    }
+    return new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(arr, 3))
+  }, [])
+  useFrame((_, d) => {
+    ref.current.position.copy(camera.position)
+    ref.current.rotation.y += d * 0.03
+    ref.current.rotation.x += d * 0.015
+  })
+  return (
+    <points ref={ref}>
+      <primitive object={geom} attach="geometry" />
+      <pointsMaterial color="#cbd6ff" size={0.7} transparent opacity={0.35} sizeAttenuation blending={THREE.AdditiveBlending} depthWrite={false} />
     </points>
   )
 }
@@ -277,11 +387,21 @@ function Connections({
   )
 }
 
-// Cinematic camera: ease-in-out fly to selected planet (accelerate then settle).
+const easeOutCubic = (x: number) => 1 - Math.pow(1 - x, 3)
+const easeInOut = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2)
+
+// Intro fly-in on load + cinematic fly-to on select.
 function CameraRig({ posMap }: { posMap: React.MutableRefObject<Map<number, THREE.Vector3>> }) {
   const selected = useGalaxy((s) => s.selected)
   const controls = useRef<any>(null)
   const { camera } = useThree()
+
+  const far = useMemo(() => new THREE.Vector3(0, 220, 640), [])
+  const home = useMemo(() => new THREE.Vector3(0, 55, 165), [])
+  const origin = useMemo(() => new THREE.Vector3(0, 0, 0), [])
+  const introDone = useRef(false)
+  const introT = useRef(0)
+
   const prevId = useRef<number | null>(null)
   const flyT = useRef(1)
   const start = useRef(new THREE.Vector3())
@@ -289,16 +409,35 @@ function CameraRig({ posMap }: { posMap: React.MutableRefObject<Map<number, THRE
   const tPos = useRef(new THREE.Vector3())
   const tLook = useRef(new THREE.Vector3())
 
-  const ease = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2)
+  useEffect(() => {
+    camera.position.copy(far)
+  }, [camera, far])
 
   useFrame((_, delta) => {
+    // intro fly-in
+    if (!introDone.current) {
+      if (selected) {
+        introDone.current = true
+      } else {
+        introT.current = Math.min(1, introT.current + delta / 3.2)
+        const e = easeOutCubic(introT.current)
+        camera.position.lerpVectors(far, home, e)
+        if (controls.current) {
+          controls.current.target.lerp(origin, 0.06)
+          controls.current.update()
+        }
+        if (introT.current >= 1) introDone.current = true
+        return
+      }
+    }
+
     const id = selected?.id ?? null
     if (id !== prevId.current) {
       prevId.current = id
       if (id != null) {
         flyT.current = 0
         start.current.copy(camera.position)
-        startTarget.current.copy(controls.current ? controls.current.target : new THREE.Vector3())
+        startTarget.current.copy(controls.current ? controls.current.target : origin)
       }
     }
     if (id == null) return
@@ -312,14 +451,13 @@ function CameraRig({ posMap }: { posMap: React.MutableRefObject<Map<number, THRE
 
     if (flyT.current < 1) {
       flyT.current = Math.min(1, flyT.current + delta / 1.4)
-      const e = ease(flyT.current)
+      const e = easeInOut(flyT.current)
       camera.position.lerpVectors(start.current, tPos.current, e)
       if (controls.current) {
         controls.current.target.lerpVectors(startTarget.current, tLook.current, e)
         controls.current.update()
       }
     } else {
-      // keep gently tracking the moving planet after arrival
       camera.position.lerp(tPos.current, 0.04)
       if (controls.current) {
         controls.current.target.lerp(tLook.current, 0.06)
@@ -340,7 +478,7 @@ function CameraRig({ posMap }: { posMap: React.MutableRefObject<Map<number, THRE
       rotateSpeed={0.5}
       zoomSpeed={0.9}
       minDistance={4}
-      maxDistance={460}
+      maxDistance={520}
     />
   )
 }
@@ -353,25 +491,24 @@ export default function Galaxy() {
 
   return (
     <Canvas
-      camera={{ position: [0, 50, 150], fov: 55 }}
+      camera={{ position: [0, 55, 165], fov: 55 }}
       dpr={[1, 2]}
       gl={{ antialias: true, powerPreference: 'high-performance' }}
       onPointerMissed={() => select(null)}
     >
       <color attach="background" args={['#04030a']} />
-      <fog attach="fog" args={['#04030a', 150, 460]} />
-      <ambientLight intensity={0.35} />
+      <fog attach="fog" args={['#04030a', 90, 380]} />
+      <ambientLight intensity={0.32} />
 
-      <Stars radius={340} depth={130} count={9000} factor={5} saturation={0} fade speed={0.4} />
+      <Stars radius={360} depth={140} count={9000} factor={5} saturation={0} fade speed={0.4} />
       <DataParticles />
+      <NearDust />
       <Bridges systems={systems} />
 
       {systems.map((s) => (
         <SystemStar key={s.key} system={s} />
       ))}
-      {placed.map((p) => (
-        <Ring key={'ring' + p.repo.id} orbit={p.orbit} />
-      ))}
+      {placed.map((p) => (p.orbit.showRing ? <Ring key={'ring' + p.repo.id} orbit={p.orbit} /> : null))}
       {placed.map((p) => (
         <RepoPlanet key={p.repo.id} repo={p.repo} orbit={p.orbit} styleKey={p.styleKey} posMap={posMap} />
       ))}
