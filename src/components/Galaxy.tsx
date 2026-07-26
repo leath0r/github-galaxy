@@ -5,9 +5,8 @@ import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing'
 import * as THREE from 'three'
 import type { Repo } from '../lib/github'
 import { useGalaxy } from '../lib/store'
-import RepoPlanet from './RepoPlanet'
+import RepoPlanet, { type Orbit } from './RepoPlanet'
 
-// deterministic pseudo-random from a string
 function hash(str: string) {
   let h = 2166136261
   for (let i = 0; i < str.length; i++) {
@@ -19,123 +18,210 @@ function hash(str: string) {
 
 interface Placed {
   repo: Repo
-  position: [number, number, number]
-  radius: number
-  trending: boolean
+  orbit: Orbit
 }
 
+// Lay repos out along logarithmic spiral arms — a real galaxy shape.
 function layout(repos: Repo[]): Placed[] {
-  // group repos by language -> each language becomes a cluster on a big sphere
-  const langs = Array.from(new Set(repos.map((r) => r.language || 'Other')))
-  const clusterCenter: Record<string, THREE.Vector3> = {}
-  const R = 26
-  langs.forEach((lang, i) => {
-    // golden-spiral distribution of cluster centers
-    const y = 1 - (i / Math.max(1, langs.length - 1)) * 2
-    const rad = Math.sqrt(1 - y * y)
-    const theta = i * 2.399963
-    clusterCenter[lang] = new THREE.Vector3(
-      Math.cos(theta) * rad,
-      y,
-      Math.sin(theta) * rad,
-    ).multiplyScalar(R)
-  })
+  const ranked = [...repos].sort((a, b) => b.stargazers_count - a.stargazers_count)
+  const total = ranked.length
+  const ARMS = 4
+  const WIND = 3.4 // how tightly arms wind
+  const RMIN = 4
+  const RMAX = 46
 
-  const now = Date.now()
-  return repos.map((r) => {
-    const lang = r.language || 'Other'
-    const c = clusterCenter[lang]
-    const hx = hash(r.full_name + 'x') - 0.5
-    const hy = hash(r.full_name + 'y') - 0.5
-    const hz = hash(r.full_name + 'z') - 0.5
-    const spread = 9
-    const position: [number, number, number] = [
-      c.x + hx * spread,
-      c.y + hy * spread,
-      c.z + hz * spread,
-    ]
-    const radius = 0.5 + Math.log10(r.stargazers_count + 10) * 0.42
-    const trending = now - new Date(r.pushed_at).getTime() < 7 * 864e5
-    return { repo: r, position, radius, trending }
+  return ranked.map((repo, rank) => {
+    const h1 = hash(repo.full_name + 'a')
+    const h2 = hash(repo.full_name + 'b')
+    const h3 = hash(repo.full_name + 'c')
+    const h4 = hash(repo.full_name + 'd')
+
+    // denser toward core: sqrt distribution, most-starred repos near center
+    const norm = rank / Math.max(1, total - 1)
+    const r = RMIN + (RMAX - RMIN) * Math.sqrt(norm) + (h1 - 0.5) * 4
+
+    const arm = rank % ARMS
+    const armAngle = (arm / ARMS) * Math.PI * 2
+    // logarithmic-ish winding + per-repo angular scatter (tighter near core)
+    const scatter = (h2 - 0.5) * (0.5 + (1 - norm) * 0.6)
+    const a0 = armAngle + Math.log(r + 1) * (WIND / 4) + scatter
+
+    // disk thickness: thick bulge in the core, thin at the rim
+    const thickness = 2.6 * Math.exp(-r / 22)
+    const y = (h3 - 0.5) * thickness * 2 + (h4 - 0.5) * 1.2
+
+    const size = 0.45 + Math.log10(repo.stargazers_count + 10) * 0.4
+    // differential rotation: inner orbits faster (Keplerian-ish)
+    const speed = (0.14 / Math.sqrt(r)) * 1.0
+    const trending = Date.now() - new Date(repo.pushed_at).getTime() < 7 * 864e5
+
+    return {
+      repo,
+      orbit: { r, a0, y, speed, phase: h1 * Math.PI * 2, size, trending },
+    }
   })
 }
 
-// links between the hovered/selected repo and repos sharing language or a topic
-function Connections({ placed }: { placed: Placed[] }) {
-  const hoveredId = useGalaxy((s) => s.hovered)
-  const selectedId = useGalaxy((s) => s.selected?.id)
-  const focusId = hoveredId ?? selectedId
-
-  const lines = useMemo(() => {
-    if (!focusId) return [] as THREE.Vector3[][]
-    const focus = placed.find((p) => p.repo.id === focusId)
-    if (!focus) return []
-    const ftopics = new Set(focus.repo.topics)
-    const related = placed.filter((p) => {
-      if (p.repo.id === focusId) return false
-      const sameLang = p.repo.language && p.repo.language === focus.repo.language
-      const sharedTopic = p.repo.topics.some((t) => ftopics.has(t))
-      return sameLang || sharedTopic
-    })
-    const fp = new THREE.Vector3(...focus.position)
-    return related
-      .slice(0, 14)
-      .map((p) => [fp, new THREE.Vector3(...p.position)])
-  }, [focusId, placed])
-
-  if (!lines.length) return null
+// Glowing galactic core.
+function Core() {
+  const ref = useRef<THREE.Mesh>(null!)
+  useFrame((s) => {
+    const p = 1 + Math.sin(s.clock.elapsedTime * 0.8) * 0.06
+    ref.current.scale.setScalar(p)
+  })
   return (
-    <>
-      {lines.map((pts, i) => {
-        const geom = new THREE.BufferGeometry().setFromPoints(pts)
-        return (
-          <line key={i}>
-            <primitive object={geom} attach="geometry" />
-            <lineBasicMaterial
-              color="#8b95ff"
-              transparent
-              opacity={0.35}
-              blending={THREE.AdditiveBlending}
-              depthWrite={false}
-            />
-          </line>
-        )
-      })}
-    </>
+    <group>
+      <mesh ref={ref}>
+        <sphereGeometry args={[3.2, 32, 32]} />
+        <meshBasicMaterial color="#fef3ff" transparent opacity={0.9} />
+      </mesh>
+      <mesh>
+        <sphereGeometry args={[6, 32, 32]} />
+        <meshBasicMaterial
+          color="#c4b5fd"
+          transparent
+          opacity={0.22}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+      <mesh>
+        <sphereGeometry args={[11, 32, 32]} />
+        <meshBasicMaterial
+          color="#7c3aed"
+          transparent
+          opacity={0.08}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+      <pointLight color="#e9d5ff" intensity={4} distance={140} decay={1.4} />
+    </group>
   )
 }
 
-// smooth cinematic camera fly-to on select + subtle mouse parallax
-function CameraRig({ placed }: { placed: Placed[] }) {
+// Backdrop nebula — radial gradient painted on a big inverted sphere.
+function Nebula() {
+  const texture = useMemo(() => {
+    const c = document.createElement('canvas')
+    c.width = c.height = 1024
+    const ctx = c.getContext('2d')!
+    ctx.fillStyle = '#04030a'
+    ctx.fillRect(0, 0, 1024, 1024)
+    const blobs: [number, number, number, string][] = [
+      [320, 380, 460, 'rgba(88,28,135,0.55)'],
+      [720, 300, 380, 'rgba(30,64,175,0.45)'],
+      [600, 720, 500, 'rgba(126,34,206,0.4)'],
+      [200, 760, 340, 'rgba(14,116,144,0.35)'],
+      [820, 820, 300, 'rgba(162,28,175,0.3)'],
+    ]
+    for (const [x, y, rad, col] of blobs) {
+      const g = ctx.createRadialGradient(x, y, 0, x, y, rad)
+      g.addColorStop(0, col)
+      g.addColorStop(1, 'rgba(4,3,10,0)')
+      ctx.fillStyle = g
+      ctx.fillRect(0, 0, 1024, 1024)
+    }
+    const tex = new THREE.CanvasTexture(c)
+    tex.colorSpace = THREE.SRGBColorSpace
+    return tex
+  }, [])
+
+  return (
+    <mesh scale={[-1, 1, 1]}>
+      <sphereGeometry args={[200, 32, 32]} />
+      <meshBasicMaterial map={texture} side={THREE.BackSide} depthWrite={false} />
+    </mesh>
+  )
+}
+
+// Live connection lines from the focused planet to related repos.
+function Connections({
+  placed,
+  posMap,
+}: {
+  placed: Placed[]
+  posMap: React.MutableRefObject<Map<number, THREE.Vector3>>
+}) {
+  const hoveredId = useGalaxy((s) => s.hovered)
+  const selectedId = useGalaxy((s) => s.selected?.id)
+  const focusId = hoveredId ?? selectedId
+  const geom = useRef(new THREE.BufferGeometry())
+  const lineRef = useRef<THREE.LineSegments>(null!)
+
+  const relatedIds = useMemo(() => {
+    if (!focusId) return [] as number[]
+    const focus = placed.find((p) => p.repo.id === focusId)
+    if (!focus) return []
+    const ftopics = new Set(focus.repo.topics)
+    return placed
+      .filter((p) => {
+        if (p.repo.id === focusId) return false
+        const sameLang = p.repo.language && p.repo.language === focus.repo.language
+        const sharedTopic = p.repo.topics.some((t) => ftopics.has(t))
+        return sameLang || sharedTopic
+      })
+      .slice(0, 16)
+      .map((p) => p.repo.id)
+  }, [focusId, placed])
+
+  useFrame(() => {
+    if (!focusId || relatedIds.length === 0) {
+      lineRef.current.visible = false
+      return
+    }
+    const fp = posMap.current.get(focusId)
+    if (!fp) return
+    const pts: number[] = []
+    for (const id of relatedIds) {
+      const p = posMap.current.get(id)
+      if (!p) continue
+      pts.push(fp.x, fp.y, fp.z, p.x, p.y, p.z)
+    }
+    geom.current.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3))
+    geom.current.attributes.position.needsUpdate = true
+    geom.current.setDrawRange(0, pts.length / 3)
+    lineRef.current.visible = true
+  })
+
+  return (
+    <lineSegments ref={lineRef}>
+      <primitive object={geom.current} attach="geometry" />
+      <lineBasicMaterial
+        color="#a5b4fc"
+        transparent
+        opacity={0.4}
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+      />
+    </lineSegments>
+  )
+}
+
+// Cinematic camera: fly to selected planet (live position) + idle parallax.
+function CameraRig({ posMap }: { posMap: React.MutableRefObject<Map<number, THREE.Vector3>> }) {
   const selected = useGalaxy((s) => s.selected)
   const controls = useRef<any>(null)
   const { camera } = useThree()
-  const targetPos = useRef(new THREE.Vector3())
-  const targetLook = useRef(new THREE.Vector3())
-  const flying = useRef(false)
+  const tPos = useRef(new THREE.Vector3())
+  const tLook = useRef(new THREE.Vector3())
 
   useFrame((state) => {
     if (selected) {
-      const p = placed.find((x) => x.repo.id === selected.id)
+      const p = posMap.current.get(selected.id)
       if (p) {
-        const planet = new THREE.Vector3(...p.position)
-        const dir = planet.clone().normalize()
-        targetPos.current.copy(planet).addScaledVector(dir, 6 + p.radius * 2)
-        targetLook.current.copy(planet)
-        flying.current = true
+        const dir = p.clone().normalize()
+        tPos.current.copy(p).addScaledVector(dir, 7).add(new THREE.Vector3(0, 2, 0))
+        tLook.current.copy(p)
+        camera.position.lerp(tPos.current, 0.05)
+        if (controls.current) {
+          controls.current.target.lerp(tLook.current, 0.08)
+          controls.current.update()
+        }
       }
-    }
-    if (flying.current) {
-      camera.position.lerp(targetPos.current, 0.06)
-      if (controls.current) {
-        controls.current.target.lerp(targetLook.current, 0.06)
-        controls.current.update()
-      }
-      if (camera.position.distanceTo(targetPos.current) < 0.4) flying.current = false
-    } else if (!selected && controls.current) {
-      // gentle mouse parallax when idle
-      const px = state.pointer.x * 1.5
-      const py = state.pointer.y * 1.5
+    } else if (controls.current) {
+      const px = state.pointer.x * 2
+      const py = state.pointer.y * 2
       controls.current.target.lerp(new THREE.Vector3(px, py, 0), 0.02)
       controls.current.update()
     }
@@ -150,10 +236,8 @@ function CameraRig({ placed }: { placed: Placed[] }) {
       dampingFactor={0.08}
       rotateSpeed={0.5}
       zoomSpeed={0.8}
-      minDistance={4}
-      maxDistance={90}
-      autoRotate={!selected}
-      autoRotateSpeed={0.15}
+      minDistance={5}
+      maxDistance={110}
     />
   )
 }
@@ -162,43 +246,34 @@ export default function Galaxy() {
   const repos = useGalaxy((s) => s.repos)
   const select = useGalaxy((s) => s.select)
   const placed = useMemo(() => layout(repos), [repos])
+  const posMap = useRef<Map<number, THREE.Vector3>>(new Map())
 
   return (
     <Canvas
-      camera={{ position: [0, 6, 60], fov: 55 }}
+      camera={{ position: [0, 24, 72], fov: 55 }}
       dpr={[1, 2]}
       gl={{ antialias: true, powerPreference: 'high-performance' }}
       onPointerMissed={() => select(null)}
     >
-      <color attach="background" args={['#05060f']} />
-      <fog attach="fog" args={['#05060f', 55, 120]} />
-      <ambientLight intensity={0.6} />
-      <pointLight position={[0, 0, 0]} intensity={2.5} color="#a78bfa" distance={120} />
-      <pointLight position={[40, 30, -20]} intensity={1.2} color="#60a5fa" />
+      <color attach="background" args={['#04030a']} />
+      <fog attach="fog" args={['#04030a', 70, 150]} />
+      <ambientLight intensity={0.35} />
+      <pointLight position={[50, 40, -30]} intensity={1.0} color="#60a5fa" />
 
-      <Stars radius={140} depth={60} count={6000} factor={4} saturation={0} fade speed={0.6} />
+      <Nebula />
+      <Stars radius={160} depth={70} count={7000} factor={4.5} saturation={0} fade speed={0.5} />
+      <Core />
 
       {placed.map((p) => (
-        <RepoPlanet
-          key={p.repo.id}
-          repo={p.repo}
-          position={p.position}
-          radius={p.radius}
-          trending={p.trending}
-        />
+        <RepoPlanet key={p.repo.id} repo={p.repo} orbit={p.orbit} posMap={posMap} />
       ))}
 
-      <Connections placed={placed} />
-      <CameraRig placed={placed} />
+      <Connections placed={placed} posMap={posMap} />
+      <CameraRig posMap={posMap} />
 
       <EffectComposer>
-        <Bloom
-          intensity={0.9}
-          luminanceThreshold={0.15}
-          luminanceSmoothing={0.4}
-          mipmapBlur
-        />
-        <Vignette eskil={false} offset={0.2} darkness={0.9} />
+        <Bloom intensity={1.15} luminanceThreshold={0.12} luminanceSmoothing={0.5} mipmapBlur />
+        <Vignette eskil={false} offset={0.25} darkness={0.95} />
       </EffectComposer>
     </Canvas>
   )

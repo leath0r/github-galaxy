@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import Galaxy from './components/Galaxy'
 import SearchBar from './components/SearchBar'
-import Explore from './components/Explore'
 import InfoPanel from './components/InfoPanel'
 import Loader from './components/Loader'
 import Settings from './components/Settings'
@@ -60,6 +59,23 @@ export default function App() {
         {/* top-right controls */}
         <div className="pointer-events-auto fixed right-5 top-6 z-30 flex gap-2">
           <button
+            onClick={onSurprise}
+            className="glass-soft flex items-center gap-1.5 rounded-full px-4 py-2.5 text-[13px] font-medium text-white/85 transition hover:text-white"
+            title="Jump to a random galaxy"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M4 4h4l12 16h-4M20 4h-4L4 20h4"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path d="M16 4h4v4M16 20h4v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Surprise
+          </button>
+          <button
             onClick={() => setShowSettings(true)}
             className="glass-soft rounded-full p-2.5 text-white/80 transition hover:text-white"
             aria-label="Settings"
@@ -76,7 +92,6 @@ export default function App() {
           </button>
         </div>
 
-        <Explore onPick={onSearch} onSurprise={onSurprise} />
         <InfoPanel />
         <Settings />
       </div>

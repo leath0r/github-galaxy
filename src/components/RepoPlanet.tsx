@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
@@ -6,14 +6,24 @@ import type { Repo } from '../lib/github'
 import { langColor } from '../lib/github'
 import { useGalaxy } from '../lib/store'
 
-interface Props {
-  repo: Repo
-  position: [number, number, number]
-  radius: number
+export interface Orbit {
+  r: number // orbital radius from galactic core
+  a0: number // starting angle
+  y: number // height in the disk
+  speed: number // angular velocity (differential rotation)
+  phase: number // bob phase
+  size: number // planet radius
   trending: boolean
 }
 
-export default function RepoPlanet({ repo, position, radius, trending }: Props) {
+interface Props {
+  repo: Repo
+  orbit: Orbit
+  posMap: React.MutableRefObject<Map<number, THREE.Vector3>>
+}
+
+export default function RepoPlanet({ repo, orbit, posMap }: Props) {
+  const group = useRef<THREE.Group>(null!)
   const mesh = useRef<THREE.Mesh>(null!)
   const halo = useRef<THREE.Mesh>(null!)
   const [local, setLocal] = useState(false)
@@ -23,32 +33,39 @@ export default function RepoPlanet({ repo, position, radius, trending }: Props) 
   const hoveredId = useGalaxy((s) => s.hovered)
 
   const active = local || hoveredId === repo.id || selectedId === repo.id
-  const color = langColor(repo.language)
+  const color = useMemo(() => new THREE.Color(langColor(repo.language)), [repo.language])
+  const vec = useMemo(() => new THREE.Vector3(), [])
 
   useFrame((state, delta) => {
-    if (!mesh.current) return
-    mesh.current.rotation.y += delta * 0.15
-    const target = active ? 1.45 : 1
+    const t = state.clock.elapsedTime
+    // real orbital motion around the core (differential: inner faster)
+    const angle = orbit.a0 + t * orbit.speed
+    const x = Math.cos(angle) * orbit.r
+    const z = Math.sin(angle) * orbit.r
+    const y = orbit.y + Math.sin(t * 0.6 + orbit.phase) * 0.35
+    group.current.position.set(x, y, z)
+    posMap.current.set(repo.id, vec.set(x, y, z).clone())
+
+    mesh.current.rotation.y += delta * 0.2
+    const target = active ? 1.5 : 1
     const s = THREE.MathUtils.lerp(mesh.current.scale.x, target, 0.15)
     mesh.current.scale.setScalar(s)
-    if (halo.current) {
-      const pulse = trending ? 1 + Math.sin(state.clock.elapsedTime * 3) * 0.08 : 1
-      const hs = (active ? 1.9 : 1.5) * pulse
-      halo.current.scale.setScalar(THREE.MathUtils.lerp(halo.current.scale.x, hs, 0.15))
-      const mat = halo.current.material as THREE.MeshBasicMaterial
-      mat.opacity = THREE.MathUtils.lerp(mat.opacity, active ? 0.35 : 0.14, 0.15)
-    }
+
+    const pulse = orbit.trending ? 1 + Math.sin(t * 3) * 0.1 : 1
+    const hs = (active ? 2.1 : 1.55) * pulse
+    halo.current.scale.setScalar(THREE.MathUtils.lerp(halo.current.scale.x, hs, 0.15))
+    const hm = halo.current.material as THREE.MeshBasicMaterial
+    hm.opacity = THREE.MathUtils.lerp(hm.opacity, active ? 0.4 : 0.16, 0.15)
   })
 
   return (
-    <group position={position}>
-      {/* glow halo */}
-      <mesh ref={halo} scale={1.5}>
-        <sphereGeometry args={[radius, 20, 20]} />
+    <group ref={group}>
+      <mesh ref={halo} scale={1.55}>
+        <sphereGeometry args={[orbit.size, 20, 20]} />
         <meshBasicMaterial
           color={color}
           transparent
-          opacity={0.14}
+          opacity={0.16}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
         />
@@ -72,35 +89,35 @@ export default function RepoPlanet({ repo, position, radius, trending }: Props) 
           select(repo)
         }}
       >
-        <sphereGeometry args={[radius, 32, 32]} />
+        <sphereGeometry args={[orbit.size, 32, 32]} />
         <meshStandardMaterial
           color={color}
           emissive={color}
-          emissiveIntensity={active ? 2.2 : 1.2}
-          roughness={0.35}
-          metalness={0.5}
+          emissiveIntensity={active ? 2.6 : 1.4}
+          roughness={0.3}
+          metalness={0.6}
         />
       </mesh>
 
       {active && (
-        <Html center distanceFactor={22} zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
+        <Html center distanceFactor={20} zIndexRange={[10, 0]} style={{ pointerEvents: 'none' }}>
           <div
             style={{
-              transform: 'translateY(-42px)',
+              transform: 'translateY(-40px)',
               whiteSpace: 'nowrap',
               padding: '6px 12px',
               borderRadius: 999,
               fontSize: 13,
               fontWeight: 600,
               color: '#fff',
-              background: 'rgba(10,12,30,0.6)',
-              backdropFilter: 'blur(10px)',
+              background: 'rgba(8,10,24,0.55)',
+              backdropFilter: 'blur(12px)',
               border: '1px solid rgba(255,255,255,0.18)',
               boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
             }}
           >
             {repo.full_name}
-            <span style={{ opacity: 0.7, marginLeft: 8 }}>★ {fmt(repo.stargazers_count)}</span>
+            <span style={{ opacity: 0.65, marginLeft: 8 }}>★ {fmt(repo.stargazers_count)}</span>
           </div>
         </Html>
       )}
